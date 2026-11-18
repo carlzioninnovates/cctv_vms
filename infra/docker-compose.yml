@@ -1,0 +1,72 @@
+# Dev/single-host stack. Production: split media + frps onto their own hosts.
+name: vms
+
+networks:
+  public: {}
+  backend:
+    internal: true            # no internet egress, not published
+    ipam:
+      config: [{ subnet: 172.30.0.0/24 }]
+
+volumes:
+  pg: {}
+  redis: {}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: vms
+      POSTGRES_USER: vms
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes: [pg:/var/lib/postgresql/data]
+    networks: [backend]
+    ports: ["127.0.0.1:5432:5432"]
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redis:/data]
+    networks: [backend]
+    ports: ["127.0.0.1:6379:6379"]
+
+  frps:
+    image: snowdreamtech/frps:0.71.1
+    volumes: ["./frps:/etc/frp:ro"]
+    command: ["-c", "/etc/frp/frps.toml"]
+    networks:
+      public: {}
+      backend: { ipv4_address: 172.30.0.10 }
+    ports: ["7000:7000"]      # agent control only; proxied NVR ports stay on backend
+
+  mediamtx:
+    image: bluenviron/mediamtx:1.21.3   # keep in sync with infra/dev/bin/MEDIAMTX_VERSION
+    volumes: ["../media-engine/mediamtx.yml:/mediamtx.yml:ro"]
+    networks: [public, backend]
+    ports:
+      - "8889:8889"           # WebRTC/WHEP (behind HTTPS proxy in prod)
+      - "8888:8888"           # HLS
+      - "8189:8189/udp"
+      - "8189:8189/tcp"
+      - "127.0.0.1:9997:9997" # control API, local only
+
+  coturn:
+    image: coturn/coturn:4.6
+    network_mode: host
+    volumes: ["../media-engine/coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro"]
+
+  data-plane:
+    build: ../data-plane
+    environment:
+      VMS_HMAC_SECRET: ${DATA_PLANE_SECRET}
+      VMS_CREDENTIAL_KEY: ${VMS_CREDENTIAL_KEY}
+      VMS_REDIS_URL: redis://redis:6379/0
+      VMS_MEDIAMTX_API: http://mediamtx:9997
+    networks: [backend]
+    depends_on: [redis, mediamtx, frps]
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    volumes: ["./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    networks: [backend]
+    ports: ["127.0.0.1:9090:9090"]

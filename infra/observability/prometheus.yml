@@ -1,0 +1,10 @@
+global:
+  scrape_interval: 15s
+scrape_configs:
+  - job_name: data-plane
+    static_configs: [{ targets: ["data-plane:8000"] }]
+  - job_name: mediamtx
+    static_configs: [{ targets: ["mediamtx:9998"] }]
+  - job_name: frps
+    metrics_path: /metrics
+    static_configs: [{ targets: ["frps:7500"] }]

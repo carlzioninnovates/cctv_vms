@@ -1,0 +1,15 @@
+[Unit]
+Description=VMS edge agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/vms-agent/agent.env
+ExecStart=/opt/vms-agent/.venv/bin/vms-agent run
+Restart=always
+RestartSec=5
+# Brownouts: start fast after power returns
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,52 @@
+# MediaMTX — RTSP in (through tunnels), WebRTC (WHEP) + HLS out.
+# Paths are created at runtime by data-plane via the control API; none are static.
+logLevel: info
+
+api: yes
+apiAddress: :9997            # internal network only (see docker-compose)
+metrics: yes
+metricsAddress: :9998
+
+# Viewer auth: every read is checked against the control plane (short-lived JWT in ?token=)
+authMethod: http
+authHTTPAddress: http://control-plane/api/internal/media/auth
+authHTTPExclude:
+  - action: api
+  - action: metrics
+
+rtsp: yes
+rtspAddress: :8554
+rtspTransports: [tcp]
+
+webrtc: yes
+webrtcAddress: :8889
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: :8189       # TCP fallback for mobile carriers that block UDP
+webrtcIPsFromInterfaces: no
+webrtcAdditionalHosts: [media.example.ph]
+webrtcICEServers2:
+  - url: turn:turn.example.ph:3478
+    username: AUTH_SECRET          # coturn use-auth-secret; replace via env
+    password: AUTH_SECRET
+    clientOnly: true
+
+hls: yes
+hlsAddress: :8888
+hlsVariant: lowLatency
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+hlsAlwaysRemux: no
+
+rtmp: no
+srt: no
+# MoQ (on by default since ~v1.20) opens :8892/:8893 and writes a TLS key to the CWD. Unused here.
+moq: no
+
+pathDefaults:
+  sourceOnDemand: yes
+  sourceOnDemandStartTimeout: 15s
+  sourceOnDemandCloseAfter: 15s
+  rtspTransport: tcp
+
+paths: {}

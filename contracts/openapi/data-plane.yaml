@@ -1,0 +1,336 @@
+openapi: 3.1.0
+info:
+  title: VMS Data Plane — internal API
+  version: 0.1.0
+  description: |
+    Called only by control-plane (Laravel) on the private network.
+    Every request is signed: header `X-VMS-Signature: t=<unix>,v1=<hex hmac-sha256>`
+    over `"<t>.<raw body>"` with the shared secret. Requests older than 300 s are rejected.
+servers:
+  - url: http://data-plane:8000
+security:
+  - hmac: []
+paths:
+  /internal/agents/{agent_uid}/certificate:
+    post:
+      summary: Sign the agent's CSR (subject is forced to agent_uid) and return tunnel settings
+      parameters: [{ $ref: '#/components/parameters/AgentUid' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [csr_pem], properties: { csr_pem: { type: string } } }
+      responses:
+        '200':
+          description: Issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cert_pem: { type: string }
+                  ca_pem: { type: string }
+                  fingerprint: { type: string, description: SHA-256 of DER, lowercase hex }
+                  expires_at: { type: string, format: date-time }
+                  frps:
+                    type: object
+                    properties:
+                      host: { type: string }
+                      port: { type: integer }
+                      token: { type: string }
+                      tunnel_secret: { type: string }
+        '422': { description: Invalid CSR }
+    delete:
+      summary: Revoke — agent API and frps login stop working immediately
+      parameters: [{ $ref: '#/components/parameters/AgentUid' }]
+      responses:
+        '204': { description: Revoked }
+  /internal/credentials:
+    post:
+      summary: Store NVR credentials encrypted; returns a reference (Laravel never stores the password)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties: { username: { type: string }, password: { type: string } }
+      responses:
+        '200':
+          description: Stored
+          content:
+            application/json:
+              schema: { type: object, properties: { credential_ref: { type: string } } }
+  /internal/credentials/{ref}:
+    delete:
+      summary: Delete stored credentials
+      parameters: [{ name: ref, in: path, required: true, schema: { type: string } }]
+      responses:
+        '204': { description: Deleted }
+  /internal/agents/{agent_uid}/discover:
+    post:
+      summary: WS-Discovery scan on the site LAN, run by the agent
+      parameters: [{ $ref: '#/components/parameters/AgentUid' }]
+      responses:
+        '200':
+          description: Devices found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  devices:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        ip: { type: string }
+                        brand_guess: { enum: [hikvision, dahua, uniview, onvif] }
+                        hardware: { type: [string, 'null'] }
+                        name: { type: [string, 'null'] }
+        '504': { description: Agent offline or did not answer }
+  /internal/agents/{agent_uid}/expose:
+    post:
+      summary: Open tunnels to an NVR's ports and report LAN reachability
+      parameters: [{ $ref: '#/components/parameters/AgentUid' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lan_host, ports]
+              properties:
+                lan_host: { type: string }
+                ports:
+                  type: array
+                  maxItems: 4
+                  items:
+                    type: object
+                    required: [port, kind]
+                    properties:
+                      port: { type: integer }
+                      kind: { enum: [http, rtsp, onvif] }
+      responses:
+        '200':
+          description: Tunnels open
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reachable: { type: object, additionalProperties: { type: boolean }, description: '"ip:port" -> answered on LAN' }
+                  ports: { type: object, additionalProperties: { type: integer }, description: 'LAN port -> frps port' }
+        '503': { description: Tunnel port pool exhausted }
+        '504': { description: Agent offline or did not answer }
+  /internal/nvrs/{nvr_id}/probe:
+    post:
+      summary: Probe a device and return what it can do
+      description: Never retries after a 401, to avoid locking the NVR account.
+      parameters: [{ $ref: '#/components/parameters/NvrId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProbeRequest' }
+      responses:
+        '200':
+          description: Probe result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Capabilities' }
+        '401': { description: Device rejected credentials }
+        '504': { description: Device or tunnel unreachable }
+  /internal/nvrs/{nvr_id}/channels/{channel}/live:
+    post:
+      summary: Provision an on-demand MediaMTX path and return playback URLs
+      parameters:
+        - { $ref: '#/components/parameters/NvrId' }
+        - { $ref: '#/components/parameters/Channel' }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                stream: { enum: [main, sub], default: sub }
+      responses:
+        '200':
+          description: URLs for the browser
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StreamUrls' }
+  /internal/nvrs/{nvr_id}/channels/{channel}/playback:
+    post:
+      summary: Provision a playback path for a time range
+      parameters:
+        - { $ref: '#/components/parameters/NvrId' }
+        - { $ref: '#/components/parameters/Channel' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [start, end]
+              properties:
+                start: { type: string, format: date-time }
+                end:   { type: string, format: date-time }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StreamUrls' }
+          description: URLs for the browser
+  /internal/nvrs/{nvr_id}/channels/{channel}/snapshot:
+    get:
+      summary: JPEG snapshot (used by low-data mode)
+      parameters:
+        - { $ref: '#/components/parameters/NvrId' }
+        - { $ref: '#/components/parameters/Channel' }
+      responses:
+        '200':
+          content: { image/jpeg: {} }
+          description: Snapshot
+  /internal/nvrs/{nvr_id}/channels/{channel}/ptz:
+    post:
+      summary: Continuous PTZ move or stop
+      parameters:
+        - { $ref: '#/components/parameters/NvrId' }
+        - { $ref: '#/components/parameters/Channel' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { enum: [up, down, left, right, zoom_in, zoom_out, stop] }
+                speed:  { type: integer, minimum: 1, maximum: 7, default: 4 }
+      responses:
+        '204': { description: Sent }
+  /internal/nvrs/{nvr_id}/health:
+    get:
+      summary: HDD and recording health
+      parameters: [{ $ref: '#/components/parameters/NvrId' }]
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+          description: Health
+  /ingest/events:
+    post:
+      summary: Event batch from an edge agent (mTLS, not HMAC)
+      security: [{ agentMtls: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [agent_id, events]
+              properties:
+                agent_id: { type: string }
+                events:
+                  type: array
+                  maxItems: 500
+                  items: { $ref: '#/components/schemas/RawEvent' }
+      responses:
+        '202': { description: Accepted }
+components:
+  securitySchemes:
+    hmac:
+      type: apiKey
+      in: header
+      name: X-VMS-Signature
+    agentMtls:
+      type: mutualTLS
+  parameters:
+    AgentUid:
+      name: agent_uid
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    NvrId:
+      name: nvr_id
+      in: path
+      required: true
+      schema: { type: integer }
+    Channel:
+      name: channel
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+  schemas:
+    ProbeRequest:
+      type: object
+      required: [brand, credential_ref, agent_id]
+      properties:
+        brand: { enum: [hikvision, dahua, uniview, onvif] }
+        credential_ref: { type: string, description: Key into the data-plane secret store }
+        agent_id: { type: string }
+        lan_host: { type: string, description: NVR IP on the site LAN }
+        device_tz: { type: string, default: Asia/Manila }
+        http_port: { type: integer, default: 80 }
+        rtsp_port: { type: integer, default: 554 }
+        onvif_port: { type: integer, default: 80 }
+    Capabilities:
+      type: object
+      properties:
+        model: { type: string }
+        serial: { type: string }
+        firmware: { type: string }
+        firmware_region: { enum: [intl, cn, unknown] }
+        clock_drift_seconds: { type: [number, 'null'] }
+        vendor_api: { type: boolean }
+        onvif: { type: boolean }
+        event_stream: { enum: [vendor, onvif_pullpoint, none] }
+        playback: { enum: [vendor_rtsp, onvif_profile_g, none] }
+        hdd_health: { type: boolean }
+        channels:
+          type: array
+          items:
+            type: object
+            properties:
+              number: { type: integer }
+              name: { type: string }
+              main_codec: { enum: [h264, h265, mjpeg, unknown] }
+              sub_codec: { enum: [h264, h265, mjpeg, unknown, none] }
+              ptz: { type: boolean }
+              online: { type: boolean }
+        warnings: { type: array, items: { type: string } }
+    StreamUrls:
+      type: object
+      properties:
+        path: { type: string }
+        whep_url: { type: string }
+        hls_url: { type: string }
+        browser_playable_webrtc: { type: boolean, description: False when the codec is H.265 — the client should use HLS. }
+    Health:
+      type: object
+      properties:
+        disks:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              status: { enum: [ok, error, unformatted, missing, unknown] }
+              capacity_mb: { type: integer }
+              free_mb: { type: integer }
+        recording_channels: { type: array, items: { type: integer } }
+        checked_at: { type: string, format: date-time }
+    RawEvent:
+      type: object
+      required: [nvr_id, brand, raw_type, state, occurred_at]
+      properties:
+        nvr_id: { type: integer }
+        brand: { enum: [hikvision, dahua, uniview, onvif] }
+        raw_type: { type: string }
+        channel: { type: [integer, 'null'] }
+        state: { type: string }
+        occurred_at: { type: string, format: date-time }
+        buffered: { type: boolean, default: false }

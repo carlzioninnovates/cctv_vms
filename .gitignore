@@ -1,0 +1,30 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# Secrets and local state — never commit
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+!**/tests/**/*.pem
+infra/.env
+*.db
+*.sqlite
+*.sqlite-journal
+
+# Local dev lab (downloaded MediaMTX/frp binaries, generated CA, logs)
+infra/dev/bin/
+infra/dev/state/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/

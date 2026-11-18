@@ -1,0 +1,32 @@
+# Tunnel server. Edge agents connect OUT to this (wss/443 via proxy or 7000 direct).
+bindPort = 7000
+auth.method = "token"
+auth.token = "{{ FRPS_TOKEN }}"
+
+transport.tls.force = true
+transport.tls.certFile = "/etc/frps/server.crt"
+transport.tls.keyFile = "/etc/frps/server.key"
+transport.tls.trustedCaFile = "/etc/frps/agent-ca.crt"   # mTLS: only enrolled agents
+
+# CRITICAL: NVR ports must only be reachable from inside the cloud network.
+# Binding to 0.0.0.0 would publish every customer's NVR to the internet.
+proxyBindAddr = "172.30.0.10"
+allowPorts = [{ start = 40000, end = 59999 }]
+maxPortsPerClient = 64
+
+transport.heartbeatTimeout = 90
+transport.maxPoolCount = 5
+
+webServer.addr = "127.0.0.1"
+webServer.port = 7500
+enablePrometheus = true
+
+# Per-agent auth + port ownership (data-plane/app/api/frps_plugin.py).
+# Rejects revoked agents and any agent binding a port that isn't allocated to it.
+# Ping/NewWorkConn re-check on every heartbeat and tunnel connection so revocation takes effect
+# on open sessions too (without them a revoked agent keeps its tunnel until it reconnects).
+[[httpPlugins]]
+name = "vms-auth"
+addr = "data-plane:8000"
+path = "/frps/plugin"
+ops = ["Login", "NewProxy", "Ping", "NewWorkConn"]

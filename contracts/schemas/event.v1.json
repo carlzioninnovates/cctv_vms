@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vms.internal/schemas/event.v1.json",
+  "title": "NormalizedEvent v1",
+  "description": "One event after brand normalization. Written by data-plane to Redis stream 'vms:events', read by control-plane.",
+  "type": "object",
+  "required": ["event_id", "nvr_id", "brand", "type", "state", "occurred_at", "received_at"],
+  "additionalProperties": false,
+  "properties": {
+    "event_id":    { "type": "string", "format": "uuid" },
+    "nvr_id":      { "type": "integer" },
+    "channel":     { "type": ["integer", "null"], "minimum": 1, "description": "1-based. Null for device-level events (HDD, power)." },
+    "brand":       { "enum": ["hikvision", "dahua", "uniview", "onvif"] },
+    "type": {
+      "enum": [
+        "motion", "line_crossing", "intrusion", "human", "vehicle", "face",
+        "video_loss", "tamper", "hdd_error", "hdd_full", "recording_stopped",
+        "io_alarm", "unknown"
+      ]
+    },
+    "state":       { "enum": ["start", "stop", "pulse"] },
+    "occurred_at": { "type": "string", "format": "date-time", "description": "UTC, from the device clock (may drift)." },
+    "received_at": { "type": "string", "format": "date-time", "description": "UTC, data-plane clock. Use for ordering." },
+    "raw_type":    { "type": "string", "description": "Vendor event code before mapping, kept for debugging." },
+    "snapshot_key":{ "type": ["string", "null"], "description": "Object-storage key, if a snapshot was captured." },
+    "ai": {
+      "type": ["object", "null"],
+      "properties": {
+        "verdict":    { "enum": ["confirmed", "rejected", "skipped"] },
+        "label":      { "type": ["string", "null"] },
+        "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+      }
+    },
+    "buffered":    { "type": "boolean", "description": "True if the edge agent held this event during an outage." }
+  }
+}
